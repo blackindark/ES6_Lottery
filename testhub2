@@ -1,0 +1,717 @@
+import * as chaiAssert from "chai";
+import { describe, it } from "mocha";
+import $ from "../../$";
+import supertest from "supertest";
+import config from "../../config";
+import { _ } from "@worktile/wt-chaos";
+import { TestLibraryOperation, TestCaseOperation, TestSuiteOperation } from "../build-data";
+import { TestCaseEntity, TestLibraryEntity, TestSuiteEntity, TestPlanEntity } from "../../../src/entities";
+import { MongoDBId } from "@worktile/wt-chaos/repository";
+import { FindByPageIndexResponse } from "@worktile/wt-eros/info";
+import { NULL_SUITE_TEST_CASE_ARG } from "../../../src/modules/test-case/constants";
+import { TestCaseReferences } from "../../../src/modules/test-case/info";
+import { generateKeyPair } from "crypto";
+const teamQuery = {
+    team_id: config.teams.ycTech.teamId.toString()
+};
+
+exports = module.exports = function(agent: supertest.SuperTest<supertest.Test>) {
+    describe("case instance which CRUD relation api...", async () => {
+        let TEST_PROJECT_ID = "";
+        before("init project_id", () => {
+            TEST_PROJECT_ID = new MongoDBId().toString();
+        });
+        it("1. create testCase", async () => {
+            // create caseLibrary
+            const name = "name_test";
+            const description = "this is a first caseLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create testCase
+            let postData = {
+                title: "this is a test case instance",
+                prefix: _.guid().substr(0, 5),
+                important_level: 1,
+                maintenance_uid: config.teams.ycTech.users.test.uid,
+                type: 1,
+                suite_id: new MongoDBId().toString(),
+                library_id: caseLibrary._id.toString(),
+                steps: [{ description: "", expected_value: "" }, { description: "111", expected_value: "222" }]
+            };
+            const response = await agent
+                .post(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-case`)
+                .query(teamQuery)
+                .send(postData);
+            const result = $.getBodyFromResponse(response);
+            chaiAssert.assert.isNotNull(result);
+            // get testCase lists
+            const listResponse = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`).query(teamQuery);
+            const listResult = $.assertAndGetDataFromResponse<TestCasePageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            chaiAssert.assert.isNotNull(listResult.locked_fields);
+            chaiAssert.assert.isNotNull(listResult.normal_fields);
+            chaiAssert.assert.isNotNull(listResult.references.headers);
+            chaiAssert.assert.isNotNull(listResult.value.find(item => item.title === postData.title));
+        });
+
+        it("2. search testCase", async () => {
+            // create caseLibrary
+            const name = "name_test";
+            const description = "this is a first caseLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create testCase
+            let postData = {
+                title: "this is a test case instance",
+                prefix: _.guid().substr(0, 5),
+                important_level: 1,
+                maintenance_uid: config.teams.ycTech.users.test.uid,
+                type: "123",
+                suite_id: new MongoDBId().toString(),
+                library_id: caseLibrary._id.toString()
+            };
+            const response = await agent
+                .post(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-case`)
+                .query(teamQuery)
+                .send(postData);
+            const result = $.getBodyFromResponse(response);
+            chaiAssert.assert.isNotNull(result);
+            // search testCase by maintenance_uid
+            let searchQuery = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                maintenance_uids: config.teams.ycTech.users.test.uid
+            };
+            const listResponse = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`).query(searchQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            chaiAssert.assert.isNotNull(listResult.value.find(item => item.maintenance_uid === postData.maintenance_uid));
+            // search testCase by title
+            let searchQuery2 = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                title: "this is a test case instanc"
+            };
+            const listResponse2 = await agent
+                .get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`)
+                .query(searchQuery2);
+            const listResult2 = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse2);
+            chaiAssert.assert.isNotNull(listResult2.value.find(item => item.title === postData.title));
+            // search testCase by important_level
+            let searchQuery3 = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                important_level: postData.important_level
+            };
+            const listResponse3 = await agent
+                .get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`)
+                .query(searchQuery3);
+            const listResult3 = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse3);
+            chaiAssert.assert.isNotNull(listResult3.value.find(item => item.important_level === postData.important_level));
+            // search testCase by suite_id
+            let searchQuery4 = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                suite_id: postData.suite_id
+            };
+            const listResponse4 = await agent
+                .get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`)
+                .query(searchQuery4);
+            const listResult4 = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse4);
+            chaiAssert.assert.isNotNull(listResult4.value.find(item => item.suite_id.toString() === postData.suite_id));
+            // search testCase by suite_id is NULL_MOUDLE_CASE_INSTANCE_ARG
+            // create no suite testCase
+            await TestCaseOperation.create(agent, "no moudle testCase", caseLibrary._id.toString());
+            let searchQuery5 = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                suite_id: NULL_SUITE_TEST_CASE_ARG
+            };
+            const listResponse5 = await agent
+                .get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`)
+                .query(searchQuery5);
+            const listResult5 = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse5);
+            chaiAssert.assert.isNotNull(listResult5.value.find(item => item.suite_id === undefined));
+            // search testCase sort by created_at
+            const testCase2 = await TestCaseOperation.create(agent, "last testCase", caseLibrary._id.toString(), 2);
+            const searchQuery6 = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                sort_by: "important_level",
+                sort_direction: -1
+            };
+            const listResponse6 = await agent
+                .get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`)
+                .query(searchQuery6);
+            const listResult6 = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse6);
+            chaiAssert.assert.isTrue(listResult6.value[0].title === testCase2.title);
+        });
+
+        it("3. set testCase level", async () => {
+            // create caseLibrary
+            const name = "name_test";
+            const description = "this is a first caseLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create testCase
+            const testCaseTitle = "this is a test case instance, we test set testCases level";
+            const testCaseResponse = await TestCaseOperation.create(agent, testCaseTitle, caseLibrary._id.toString(), 1);
+            chaiAssert.assert.isNotNull(testCaseResponse);
+            // get testCase list
+            const listResponse = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`).query(teamQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            const newTestCase = listResult.value.find(item => item.title === testCaseTitle);
+            // set testCases level
+            const updateResponse = await agent
+                .put(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases/${newTestCase._id.toString()}/level`)
+                .query(teamQuery)
+                .send({ level: 2 });
+            const updateResult = $.getBodyFromResponse(updateResponse);
+            chaiAssert.assert.isTrue(updateResult);
+        });
+
+        it("4. set testCases maintenance", async () => {
+            // create caseLibrary
+            const name = "name_test";
+            const description = "this is a first caseLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create testCase
+            const testCaseTitle = "this is a test case instance, we test set testCases maintenance";
+            const testCaseResponse = await TestCaseOperation.create(agent, testCaseTitle, caseLibrary._id.toString(), 1);
+            chaiAssert.assert.isNotNull(testCaseResponse);
+            // get testCase list
+            const listResponse = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`).query(teamQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            const newTestCase = listResult.value.find(item => item.title === testCaseTitle);
+            // set testCases level
+            const data = {
+                member_id: new MongoDBId().toString()
+            };
+            const updateResponse = await agent
+                .put(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases/${newTestCase._id.toString()}/maintenance`)
+                .query(teamQuery)
+                .send(data);
+            const updateResult = $.getBodyFromResponse(updateResponse);
+            chaiAssert.assert.isTrue(updateResult);
+        });
+
+        it("5.set testCase header ", async () => {
+            const name = _.guid();
+            const description = "this is a first test for set case-instance properties";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // set case instance fields
+            const input = {
+                locked_fields: ["title"],
+                normal_fields: ["identifier"]
+            };
+            const response = await agent
+                .put(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-case-columns`)
+                .query(teamQuery)
+                .send(input);
+            const result = $.getBodyFromResponse<any[]>(response);
+            chaiAssert.assert.isNotNull(result.find(k => k.key == "title"));
+        });
+
+        it("6.get testCase columns", async () => {
+            const name = _.guid();
+            const description = "this is a first test for get case instance head";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // set testCase properties
+            const input = {
+                locked_fields: ["status"],
+                normal_fields: ["prefix"]
+            };
+
+            await agent
+                .put(`/api/testhub/test-libraries/${caseLibrary._id}/test-case-columns`)
+                .query(teamQuery)
+                .send(input);
+            //get testCase properties
+            const response = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id}/test-cases/columns`).query(teamQuery);
+            const result = $.getBodyFromResponse<Property[]>(response);
+            chaiAssert.assert.isNotNull(result);
+        });
+        it("7.delete case-instances ", async () => {
+            const name = _.guid();
+            const description = "this is a test for delete testCase";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const title = "this is a testCase title";
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            const caseLibraryId = caseLibrary._id.toString();
+            //create first case instance
+            const firstTestCase = await TestCaseOperation.create(agent, title, caseLibraryId);
+            //create second case instance
+            const secondTestCase = await TestCaseOperation.create(agent, title, caseLibraryId);
+            //delete test
+            const firstResponse = await agent
+                .del(`/api/testhub/test-libraries/${caseLibraryId}/test-cases?ids=${firstTestCase._id}`)
+                .query(teamQuery);
+
+            const firstEntity = $.getBodyFromResponse<TestCaseEntity>(firstResponse);
+            chaiAssert.assert.isTrue(firstEntity);
+            //batch delete test
+            const secondResponse = await agent
+                .del(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases?ids=${firstTestCase._id},${secondTestCase._id}`)
+                .query(teamQuery);
+            const secondEntity = $.getBodyFromResponse<TestCaseEntity>(secondResponse);
+            chaiAssert.assert.isTrue(secondEntity);
+        });
+
+        it("8.move testCases multiply for null suite to target suite", async () => {
+            //create the library
+            const libraryName = _.guid();
+            const responseForLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: libraryName });
+            const library = $.getBodyFromResponse<TestLibraryEntity>(responseForLibrary);
+            const libraryId = library._id.toString();
+            //create the targetLibrary
+            const targetLibraryName = _.guid();
+            const responseForTargetLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: targetLibraryName });
+            const targetLibrary = $.getBodyFromResponse<TestLibraryEntity>(responseForTargetLibrary);
+            //create the suite
+            const suiteName = _.guid();
+            const targetSuite = await TestSuiteOperation.create(agent, suiteName, libraryId);
+            //create two testCases
+            const firstTestCaseName = _.guid();
+            const secondTestCaseName = _.guid();
+            const testCaseOne = await TestCaseOperation.create(agent, firstTestCaseName, libraryId);
+            const testCaseTwo = await TestCaseOperation.create(agent, secondTestCaseName, libraryId);
+            // move testCases to the suite
+            const testCaseIds = testCaseOne._id.toString() + "," + testCaseTwo._id.toString();
+            const input = {
+                target_library_id: targetLibrary._id,
+                suite_id: targetSuite._id
+            };
+            const response = await agent
+                .put(`/api/testhub/test-libraries/${libraryId}/test-cases/${testCaseIds}/move`)
+                .query(teamQuery)
+                .send(input);
+            const result = $.getBodyFromResponse<boolean>(response);
+            chaiAssert.assert.isTrue(result);
+            //get data
+            let searchQuery = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                title: firstTestCaseName
+            };
+            const listResponse = await agent
+                .get(`/api/testhub/test-libraries/${targetLibrary._id.toString()}/test-cases`)
+                .query(searchQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            chaiAssert.assert.isNotNull(listResult.value.find(item => item._id.toString() === testCaseOne._id.toString()));
+        });
+        it("9.move testCases multiply for  originalSuite to target suite", async () => {
+            //create the library
+            const libraryName = _.guid();
+            const responseForLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: libraryName });
+            const library = $.getBodyFromResponse<TestLibraryEntity>(responseForLibrary);
+            const libraryId = library._id.toString();
+            //create the targetLibrary
+            const targetLibraryName = _.guid();
+            const responseForTargetLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: targetLibraryName });
+            const targetLibrary = $.getBodyFromResponse<TestLibraryEntity>(responseForTargetLibrary);
+            const targetLibraryId = targetLibrary._id.toString();
+            //create the suite
+            const oSuiteName = _.guid();
+            const originalSuite = await TestSuiteOperation.create(agent, oSuiteName, libraryId);
+            //create the suite
+            const tSuiteName = _.guid();
+            const targetSuite = await TestSuiteOperation.create(agent, tSuiteName, targetLibraryId);
+            //create two testCases
+            const firstTestCaseName = _.guid();
+            const secondTestCaseName = _.guid();
+            const testCaseOne = await TestCaseOperation.create(
+                agent,
+                firstTestCaseName,
+                libraryId,
+                null,
+                null,
+                null,
+                null,
+                originalSuite._id
+            );
+            const testCaseTwo = await TestCaseOperation.create(
+                agent,
+                secondTestCaseName,
+                libraryId,
+                null,
+                null,
+                null,
+                null,
+                originalSuite._id
+            );
+            // move testCases to the suite
+            const testCaseIds = testCaseOne._id.toString() + "," + testCaseTwo._id.toString();
+            const input = {
+                target_library_id: targetLibrary._id,
+                suite_id: targetSuite._id
+            };
+            const response = await agent
+                .put(`/api/testhub/test-libraries/${libraryId}/test-cases/${testCaseIds}/move`)
+                .query(teamQuery)
+                .send(input);
+            const result = $.getBodyFromResponse<boolean>(response);
+            chaiAssert.assert.isTrue(result);
+            //get data
+            let searchQuery = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                title: firstTestCaseName
+            };
+            const listResponse = await agent
+                .get(`/api/testhub/test-libraries/${targetLibrary._id.toString()}/test-cases`)
+                .query(searchQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            chaiAssert.assert.isNotNull(listResult.value.find(item => item._id.toString() === testCaseOne._id.toString()));
+        });
+        it("10.copy testCases multiply", async () => {
+            //create the library
+            const libraryName = _.guid();
+            const responseForLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: libraryName });
+            const library = $.getBodyFromResponse<TestLibraryEntity>(responseForLibrary);
+            const libraryId = library._id.toString();
+            //create the targetLibrary
+            const targetLibraryName = _.guid();
+            const responseForTargetLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: targetLibraryName });
+            const targetLibrary = $.getBodyFromResponse<TestLibraryEntity>(responseForTargetLibrary);
+            //create the suite
+            const suiteName = _.guid();
+            const targetSuite = await TestSuiteOperation.create(agent, suiteName, libraryId);
+            //create two testCases
+            const firstTestCaseName = _.guid().toString();
+            const secondTestCaseName = _.guid().toString();
+            const testCaseOne = await TestCaseOperation.create(agent, firstTestCaseName, libraryId);
+            const testCaseTwo = await TestCaseOperation.create(agent, secondTestCaseName, libraryId);
+            // copy testCases to the suite
+            const testCaseIds = testCaseOne._id.toString() + "," + testCaseTwo._id.toString();
+            const input = {
+                target_library_id: targetLibrary._id,
+                suite_id: targetSuite._id
+            };
+            await agent
+                .put(`/api/testhub/test-libraries/${libraryId}/test-cases/${testCaseIds}/copy`)
+                .query(teamQuery)
+                .send(input);
+            //get data
+            let searchQuery = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                title: firstTestCaseName
+            };
+            const listResponse = await agent
+                .get(`/api/testhub/test-libraries/${targetLibrary._id.toString()}/test-cases`)
+                .query(searchQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            chaiAssert.assert.isNotNull(listResult.value.find(item => item.title === testCaseOne.title));
+        });
+        it("11. set test-cases type", async () => {
+            // create caseLibrary
+            const name = "name_test";
+            const description = "this is a first caseLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create testCase
+            const testCaseTitle = "this is a test case instance, we test set testCase type";
+            const testCaseResponse = await TestCaseOperation.create(agent, testCaseTitle, caseLibrary._id.toString(), 1);
+            chaiAssert.assert.isNotNull(testCaseResponse);
+            // get testCase list
+            const listResponse = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`).query(teamQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            const newTestCase = listResult.value.find(item => item.title === testCaseTitle);
+            // set testCase type
+            const data = {
+                type: 1
+            };
+            const updateResponse = await agent
+                .put(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases/${newTestCase._id.toString()}/type`)
+                .query(teamQuery)
+                .send(data);
+            const updateResult = $.getBodyFromResponse(updateResponse);
+            chaiAssert.assert.isTrue(updateResult);
+        });
+        it("12. set test-cases suite", async () => {
+            // create caseLibrary
+            const name = "name_test";
+            const description = "this is a first caseLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const caseLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create testCase
+            const testCaseTitle = "this is a test case instance, we test set testCase suite";
+            const testCaseResponse = await TestCaseOperation.create(agent, testCaseTitle, caseLibrary._id.toString(), 1);
+            chaiAssert.assert.isNotNull(testCaseResponse);
+            // get testCase list
+            const listResponse = await agent.get(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases`).query(teamQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            const newTestCase = listResult.value.find(item => item.title === testCaseTitle);
+            //create  testSuite
+            const createSuiteData = {
+                name: "test-case suite",
+                parent_id: null,
+                after_id: null,
+                position: 1
+            };
+            const testSuiteResponse = await agent
+                .post(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/suite`)
+                .query(teamQuery)
+                .send(createSuiteData);
+            const suiteResult = $.getBodyFromResponse<TestSuiteEntity>(testSuiteResponse);
+            // set testCase suite
+            const data = {
+                test_suite_id: suiteResult._id
+            };
+            const updateResponse = await agent
+                .put(`/api/testhub/test-libraries/${caseLibrary._id.toString()}/test-cases/${newTestCase._id.toString()}/suite`)
+                .query(teamQuery)
+                .send(data);
+            //validate
+            const updateResult = $.assertAndGetDataFromResponse<{ value: boolean }>(updateResponse);
+            chaiAssert.assert.isTrue(updateResult.value);
+        });
+        it("13.copy testCases multiply", async () => {
+            //create the library
+            const libraryName = _.guid();
+            const responseForLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: libraryName });
+            const library = $.getBodyFromResponse<TestLibraryEntity>(responseForLibrary);
+            const libraryId = library._id.toString();
+            //create the targetLibrary
+            const targetLibraryName = _.guid();
+            const responseForTargetLibrary = await agent
+                .post(`/api/testhub/test-library`)
+                .query(teamQuery)
+                .send({ name: targetLibraryName });
+            const targetLibrary = $.getBodyFromResponse<TestLibraryEntity>(responseForTargetLibrary);
+            //create the suite
+            const suiteName = _.guid();
+            const targetSuite = await TestSuiteOperation.create(agent, suiteName, libraryId);
+            //create two testCases
+            const firstTestCaseName = _.guid().toString();
+            const secondTestCaseName = _.guid().toString();
+            const testCaseOne = await TestCaseOperation.create(agent, firstTestCaseName, libraryId);
+            const testCaseTwo = await TestCaseOperation.create(agent, secondTestCaseName, libraryId);
+            // copy testCases to the suite
+            const testCaseIds = testCaseOne._id.toString() + "," + testCaseTwo._id.toString();
+            const input = {
+                target_library_id: targetLibrary._id,
+                suite_id: ""
+            };
+            await agent
+                .put(`/api/testhub/test-libraries/${libraryId}/test-cases/${testCaseIds}/copy`)
+                .query(teamQuery)
+                .send(input);
+            //get data
+            let searchQuery = {
+                team_id: teamQuery.team_id,
+                pi: 0,
+                ps: 20,
+                title: firstTestCaseName
+            };
+            const listResponse = await agent
+                .get(`/api/testhub/test-libraries/${targetLibrary._id.toString()}/test-cases`)
+                .query(searchQuery);
+            const listResult = $.assertAndGetDataFromResponse<FindByPageIndexResponse<TestCaseEntity, TestCaseReferences>>(listResponse);
+            chaiAssert.assert.isNotNull(listResult.value.find(item => item.title === testCaseOne.title));
+        });
+        it.only("14. execute delete test cases that cause to remove relative test plan", async () => {
+            // create test library
+            const name = _.guid();
+            const description = "this is a first testLibrary";
+            const prefix = _.guid().substr(0, 5);
+            const project_id = TEST_PROJECT_ID;
+            const testLibrary = await TestLibraryOperation.create(
+                agent,
+                name,
+                description,
+                [config.teams.ycTech.users.test.uid],
+                prefix,
+                project_id,
+                null
+            );
+            // create first plan
+            let postDataPlan = {
+                name: _.guid(),
+                sprint_id: "",
+                icon: "",
+                assignee: config.teams.ycTech.users.test.uid,
+                start_at: 1558418776,
+                end_at: 1558418776
+            };
+            const testPlan = await agent
+                .post(`/api/testhub/test-libraries/${testLibrary._id.toString()}/test-plan`)
+                .query(teamQuery)
+                .send(postDataPlan);
+            const testPlanResult = $.getBodyFromResponse<TestPlanEntity>(testPlan);
+            //create the suite
+            const suiteName = _.guid();
+            const targetSuite = await TestSuiteOperation.create(agent, suiteName, testLibrary._id.toString());
+            // create first case
+            let postDataCaseOne = {
+                title: "this is a test case instance",
+                prefix: _.guid().substr(0, 5),
+                important_level: 1,
+                maintenance_uid: config.teams.ycTech.users.test.uid,
+                type: 1,
+                suite_id: targetSuite._id.toString(),
+                library_id: testLibrary._id.toString(),
+                steps: [{ description: "", expected_value: "" }, { description: "111", expected_value: "222" }]
+            };
+            const testCaseOneResponse = await agent
+                .post(`/api/testhub/test-libraries/${testLibrary._id.toString()}/test-case`)
+                .query(teamQuery)
+                .send(postDataCaseOne);
+            const testCaseOneResult = $.getBodyFromResponse<TestCaseEntity>(testCaseOneResponse);
+            // create second case
+            let postDataCaseTwo = {
+                title: "this is a test case instance",
+                prefix: _.guid().substr(0, 5),
+                important_level: 1,
+                maintenance_uid: config.teams.ycTech.users.test.uid,
+                type: 1,
+                suite_id: targetSuite._id.toString(),
+                library_id: testLibrary._id.toString(),
+                steps: [{ description: "", expected_value: "" }, { description: "111", expected_value: "222" }]
+            };
+            const testCaseTwoResponse = await agent
+                .post(`/api/testhub/test-libraries/${testLibrary._id.toString()}/test-case`)
+                .query(teamQuery)
+                .send(postDataCaseOne);
+            const testCaseTwoResult = $.getBodyFromResponse<TestCaseEntity>(testCaseTwoResponse);
+            // related  test plan and two test cases
+            const relatedPostData = {
+                case_ids: [testCaseOneResult._id.toString(), testCaseTwoResult._id.toString()]
+            };
+            const relatedResponse = await agent
+                .post(`/api/testhub/test-plans/${testPlanResult._id.toString()}/test-cases`)
+                .query(teamQuery)
+                .send(relatedPostData);
+            // delete the first test cases
+            const delResponse = await agent
+                .del(
+                    `/api/testhub/test-libraries/${testLibrary._id.toString()}/test-cases?ids=${testCaseOneResult._id.toString()}`
+                )
+                .query(teamQuery);
+            const delResult = $.getBodyFromResponse<Boolean>(delResponse);
+            chaiAssert.assert.isTrue(delResult);
+            // valid test cases to be null
+            const listResponseAfter = await agent
+                .get(`/api/testhub/test-libraries/${testLibrary._id.toString()}/test-cases`)
+                .query(teamQuery);
+            chaiAssert.assert.isNotNull(listResponseAfter.body.data.value.find(e => e._id.toString() === testCaseTwoResult._id.toString()));
+            chaiAssert.assert.isNotTrue(listResponseAfter.body.data.value.find(e => e._id.toString() === testCaseOneResult._id.toString()));
+            // valid first test plan's test case to be deleted
+            // /api/testhub/test-plans/:testPlanId
+            const getResponseList = await agent.get(`/api/testhub/test-plans/${testPlanResult._id.toString()}`).query(teamQuery);
+            // chaiAssert.assert.isTrue()
+        });
+    });
+};
