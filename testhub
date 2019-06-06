@@ -1,0 +1,402 @@
+import { injectable, inject, ContainerPool } from "@worktile/wt-chaos/container";
+import { Id, OperationDescription, MongoDBId, Entity, FindOptions, Session, MongoDBSession } from "@worktile/wt-chaos/repository";
+import { userService } from "@worktile/wt-tartarus-sdk/services";
+import { ServiceBase } from "@worktile/wt-eros";
+import { WTError, WTCode, _ } from "@worktile/wt-chaos";
+import { TestCaseRepository } from "../repositories";
+import { TestHubOperationContext } from "../../../info";
+import { AddTestCaseRequest } from "../info/test-case.request";
+import { TestCaseEntity, TestCaseColumn } from "../entities";
+import { TestLibraryRepository, TestSuiteRepository, TestCaseColumnRepository } from "../../../repositories";
+import { NULL_SUITE_TEST_CASE_ARG, PROPERTIES, TEST_CASE_DELETE_MAX_LENGTH, TEST_CASE_STEPS_LENGTH } from "../constants";
+import { UID } from "@worktile/wt-chaos/constants";
+import { OPS } from "../../constants";
+import { identifierGenerator } from "@worktile/wt-eros/identifier";
+import { TreeService, TreeDisplayService } from "@worktile/wt-rd-core/tree";
+import { TestHubIdentifierScopes } from "../../constants";
+import { Applications } from "@worktile/wt-eros/enums";
+import { TestSuiteEntity } from "../../../entities";
+import { TestPlanRepository } from "../../../repositories";
+import { TestRunRepository } from "src/modules/test-run/repositories";
+
+const container = ContainerPool.getDefaultContainer();
+
+@injectable()
+export class TestCaseService extends ServiceBase {
+    @inject()
+    private testCaseRepository: TestCaseRepository;
+    @inject()
+    private testCaseColumnRepository: TestCaseColumnRepository;
+    @inject()
+    private libraryRepository: TestLibraryRepository;
+
+    @inject()
+    private testPlanRepository: TestPlanRepository;
+
+    @inject()
+    private testRunRepository: TestRunRepository;
+
+    @inject()
+    private testSuiteRepository: TestSuiteRepository;
+
+    private rdCoreTreeService: TreeService<TestSuiteEntity>;
+
+    private rdCoreTreeDisplayService: TreeDisplayService<TestSuiteEntity>;
+    constructor() {
+        super();
+        this.rdCoreTreeService = new TreeService<TestSuiteEntity>(container.resolve<TestSuiteRepository>(
+            TestSuiteRepository
+        ) as TestSuiteRepository);
+        this.rdCoreTreeDisplayService = new TreeDisplayService<TestSuiteEntity>(container.resolve<TestSuiteRepository>(
+            TestSuiteRepository
+        ) as TestSuiteRepository);
+    }
+
+    public async getTestCases(operationContext: TestHubOperationContext, testLibraryId: Id, query, pageIndex?: number, pageSize?: number) {
+        const operationDescription = OperationDescription.from(operationContext);
+        const search_condition = this.getTestCasesCondition(testLibraryId, query);
+        let options: FindOptions<TestCaseEntity, MongoDBSession> = {};
+        if (query.sort_by && query.sort_direction) {
+            options.sort = [query.sort_by, Number(query.sort_direction)];
+        }
+        const findTestCasesByPageResult = await this.testCaseRepository.findByPageIndex(
+            operationDescription,
+            search_condition,
+            pageIndex,
+            pageSize,
+            options
+        );
+        // add user references and suite references
+        const userIds: string[] = [];
+        const suiteIds: Id[] = [];
+        findTestCasesByPageResult.entities.forEach(m => {
+            if (m.maintenance_uid) {
+                userIds.push(m.maintenance_uid.toString());
+            }
+            if (m.suite_id) {
+                suiteIds.push(m.suite_id);
+            }
+        });
+        // belong to suite
+        const suites = (await this.rdCoreTreeDisplayService.getTreeNodes(operationContext, {
+            _id: { $in: suiteIds }
+        })) as TestSuiteEntity[];
+
+        // get users which include property ["uid","name","display_name","desc","avatar","mobile","email"]
+        const users = await userService.getUserByIds(operationDescription, userIds, {
+            projection: {
+                uid: 1,
+                name: 1,
+                display_name: 1,
+                desc: 1,
+                avatar: 1,
+                mobile: 1,
+                email: 1
+            }
+        });
+
+        // get test case properties
+        const columns = [];
+        const header = await this.testCaseColumnRepository.findOne(operationDescription, {
+            uid: operationDescription.uid,
+            library_id: testLibraryId
+        });
+        const values = _.values(PROPERTIES);
+        if (header.locked_fields && header.locked_fields.length > 0) {
+            header.locked_fields.forEach(item => {
+                const value = values.find(k => k.key == item);
+                if (value) {
+                    columns.push({ key: item, is_locked: 1, name: value.name, type: value.type });
+                }
+            });
+        }
+
+        if (header.normal_fields && header.normal_fields.length > 0) {
+            header.normal_fields.forEach(item => {
+                const value = values.find(k => k.key == item);
+                if (value) {
+                    columns.push({ key: item, is_locked: 0, name: value.name, type: value.type });
+                }
+            });
+        }
+
+        return { findTestCasesByPageResult, users, suites, columns };
+    }
+
+    public getTestCasesCondition(testLibraryId, query) {
+        const search_condition: {
+            test_library_id: Id;
+            title?: any;
+            maintenance_uid?: any;
+            important_level?: number;
+            type?: number;
+            suite_id?: Id;
+        } = {
+            test_library_id: testLibraryId
+        };
+        if (query.title) {
+            const reg = new RegExp(_.trim(query.title), "i");
+            search_condition.title = reg;
+        }
+        if (query.maintenance_uids) {
+            search_condition.maintenance_uid = { $in: query.maintenance_uids.split(",") };
+        }
+        if (query.important_level) {
+            search_condition.important_level = Number(query.important_level);
+        }
+        if (query.type) {
+            search_condition.type = Number(query.type);
+        }
+        if (query.suite_id) {
+            if (query.suite_id === NULL_SUITE_TEST_CASE_ARG) {
+                search_condition.suite_id = null;
+            } else {
+                search_condition.suite_id = _.parseId(query.suite_id);
+            }
+        }
+        return search_condition;
+    }
+
+    public async createTestCase(request: AddTestCaseRequest): Promise<TestCaseEntity> {
+        // create case instance.
+        const newTestCase = await this.ConvertRequestInfo(request);
+        const result = await this.testCaseRepository.insertOne(request.operationDescription, newTestCase);
+        return result as TestCaseEntity;
+    }
+
+    private async ConvertRequestInfo(request: AddTestCaseRequest): Promise<TestCaseEntity> {
+        let testCaseEntity = new TestCaseEntity();
+        testCaseEntity.title = request.title;
+        testCaseEntity.important_level = request.importantLevel;
+        testCaseEntity.maintenance_uid = request.maintenanceUid;
+        testCaseEntity.test_library_id = _.parseId(request.testLibraryId.toString());
+        testCaseEntity.type = request.type;
+        if (request.suiteId && request.suiteId.toString().trim() == NULL_SUITE_TEST_CASE_ARG) {
+            testCaseEntity.suite_id = null;
+        } else {
+            testCaseEntity.suite_id = request.suiteId ? _.parseId(request.suiteId.toString()) : null;
+        }
+
+        testCaseEntity.precondition = request.precondition;
+        testCaseEntity.participant_uids = request.participantUid || [];
+        if (request.steps) {
+            request.steps.forEach(item => {
+                if (item.description.length > TEST_CASE_STEPS_LENGTH) {
+                    throw new WTError(WTCode.invalidInput, "description length is 0~1000");
+                }
+                if (item.expected_value.length > TEST_CASE_STEPS_LENGTH) {
+                    throw new WTError(WTCode.invalidInput, "expect_value length is 0~1000");
+                }
+                item.step_id = new MongoDBId();
+            });
+        }
+        testCaseEntity.steps = request.steps || [];
+        testCaseEntity.description = request.description;
+        // eros identifierGenerator.
+        testCaseEntity.identifier = await identifierGenerator.next(
+            request.operationDescription,
+            Applications.testHub,
+            TestHubIdentifierScopes.testCase
+        );
+        return testCaseEntity;
+    }
+
+    public async setTestCaseColumns(
+        operationContext: TestHubOperationContext,
+        libraryId: Id,
+        lockedFields: string[],
+        normalFields: string[]
+    ) {
+        const operationDescription = OperationDescription.from(operationContext);
+        // set test cases columns
+        try {
+            await this.testCaseColumnRepository.update(
+                operationDescription,
+                { uid: operationDescription.uid, library_id: libraryId },
+                { $set: { locked_fields: lockedFields, normal_fields: normalFields } }
+            );
+
+            // get test case columns
+            const columns = [];
+            const header = await this.testCaseColumnRepository.findOne(operationDescription, {
+                uid: operationDescription.uid,
+                library_id: libraryId
+            });
+            const values = _.values(PROPERTIES);
+            if (header.locked_fields && header.locked_fields.length > 0) {
+                header.locked_fields.forEach(item => {
+                    const value = values.find(k => k.key == item);
+                    if (value) {
+                        columns.push({ key: item, is_locked: 1, name: value.name, type: value.type });
+                    }
+                });
+            }
+
+            if (header.normal_fields && header.normal_fields.length > 0) {
+                header.normal_fields.forEach(item => {
+                    const value = values.find(k => k.key == item);
+                    if (value) {
+                        columns.push({ key: item, is_locked: 0, name: value.name, type: value.type });
+                    }
+                });
+            }
+
+            return columns;
+        } catch (error) {
+            throw new WTError(WTCode.internalError, "set test case property failure", null, null);
+        }
+    }
+
+    public async getTestCaseColumnsByLibId(operationContext: TestHubOperationContext, testLibraryId: Id) {
+        const operationDescription = OperationDescription.from(operationContext);
+        const result = await this.testCaseColumnRepository.findOne(
+            operationDescription,
+            {
+                uid: operationDescription.uid,
+                library_id: testLibraryId
+            },
+            false,
+            {
+                projection: {
+                    normal_fields: 1,
+                    locked_fields: 1
+                }
+            }
+        );
+        const properties = _.values(PROPERTIES);
+
+        return { result, properties };
+    }
+
+    public async setImportantLevel(operationContext: TestHubOperationContext, testCaseIds: Id[], level: number): Promise<boolean> {
+        const operationDescription = OperationDescription.from(operationContext);
+        const update = {
+            $set: {
+                important_level: level
+            }
+        };
+        const result = await this.testCaseRepository.updateByIds(operationDescription, testCaseIds, null, update);
+        return true;
+    }
+
+    public async setMaintenancePerson(operationContext: TestHubOperationContext, testCaseIds: Id[], maintenanceUid: UID): Promise<boolean> {
+        const operationDescription = OperationDescription.from(operationContext);
+        const update = {
+            $set: {
+                maintenance_uid: maintenanceUid
+            }
+        };
+        const result = await this.testCaseRepository.updateByIds(operationDescription, testCaseIds, null, update);
+        return true;
+    }
+
+    public async removeTestCaseByIds(operationContext: TestHubOperationContext, testCaseIds: Id[]) {
+        const operationDescription = OperationDescription.from(operationContext);
+        if (testCaseIds.length > TEST_CASE_DELETE_MAX_LENGTH) {
+            throw new WTError(WTCode.invalidInput, "delete test cases amount should below 2000", undefined, null);
+        }
+        try {
+            await this.testCaseRepository.deleteByIds(operationDescription, testCaseIds, OPS.self);
+            // TODO: test plan relation change
+            const testPlanEntities = await this.testPlanRepository.find(
+                operationDescription,
+                { test_case_ids: { $in: testCaseIds } },
+                { projection: { _id: 1 } }
+            );
+            const testPlanIds = testPlanEntities.map(e => e._id);
+            await this.testRunRepository.delete(operationDescription, OPS.self, {test_case_id: {$in: }});
+        } catch (error) {
+            throw new WTError(WTCode.internalError, "delete test case failure", undefined, null);
+        }
+        return true;
+    }
+
+    public async moveTestCaseByIds(
+        operationContext: TestHubOperationContext,
+        testCaseIds: Id[],
+        testLibraryId: Id,
+        suiteId?: Id
+    ): Promise<boolean> {
+        const operationDescription = OperationDescription.from(operationContext);
+        const originalTestCases = await this.testCaseRepository.findByIds(operationDescription, testCaseIds);
+        originalTestCases.forEach((item, i) => {
+            if (
+                (item.suite_id ? item.suite_id.toString() : null) === (suiteId ? suiteId.toString() : null) &&
+                item.test_library_id.toString() === testLibraryId.toString()
+            ) {
+                testCaseIds.splice(i, 1);
+            }
+        });
+        const update = {
+            $set: {
+                suite_id: suiteId,
+                test_library_id: testLibraryId
+            }
+        };
+        await this.testCaseRepository.updateByIds(operationDescription, testCaseIds, undefined, update);
+        return true;
+    }
+
+    public async copyTestCaseByIds(
+        operationContext: TestHubOperationContext,
+        testLibraryId: Id,
+        testCaseIds: Id[],
+        suiteId?: Id
+    ): Promise<TestCaseEntity[]> {
+        const operationDescription = OperationDescription.from(operationContext);
+        const libraryIdIsCorrect = await this.libraryRepository.findOneById(operationDescription, testLibraryId);
+        if (!libraryIdIsCorrect) {
+            throw new WTError(WTCode.invalidInput, "test case is wrong.");
+        }
+
+        const originalTestCases = await this.testCaseRepository.findByIds(operationDescription, testCaseIds);
+
+        let newTestCases: TestCaseEntity[] = [];
+
+        originalTestCases.forEach(item => {
+            const entity: TestCaseEntity = new TestCaseEntity();
+            entity.title = item.title;
+            entity.type = item.type ? item.type : null;
+            entity.maintenance_uid = item.maintenance_uid;
+            entity.steps = item.steps;
+            entity.participant_uids = item.participant_uids;
+            entity.precondition = item.precondition;
+            entity.description = item.description;
+            entity.test_library_id = testLibraryId;
+            entity.important_level = item.important_level;
+            entity.suite_id = suiteId;
+
+            newTestCases.push(entity);
+        });
+        // insert
+        const result = await this.testCaseRepository.insertMany(operationDescription, newTestCases);
+        return result as TestCaseEntity[];
+    }
+    public async setTestCaseType(operationContext: TestHubOperationContext, testCaseIds: Id[], type: number): Promise<boolean> {
+        const operationDescription = OperationDescription.from(operationContext);
+        const update = {
+            $set: {
+                type: type
+            }
+        };
+        const result = await this.testCaseRepository.updateByIds(operationDescription, testCaseIds, null, update);
+        return true;
+    }
+
+    public async setTestCaseSuite(operationContext: TestHubOperationContext, testCaseIds: Id[], suiteId: Id) {
+        const operationDescription = OperationDescription.from(operationContext);
+        const update = {
+            $set: {
+                suite_id: suiteId
+            }
+        };
+        try {
+            const result = await this.testCaseRepository.updateByIds(operationDescription, testCaseIds, null, update);
+            if (result.ok) {
+                return true;
+            }
+        } catch {
+            throw new WTError(WTCode.internalError, `set test case property failure`);
+        }
+    }
+}
